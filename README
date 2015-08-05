@@ -1,0 +1,10 @@
+Slackbot
+
+A bot for slack.
+
+TODO:
+Save initial state
+update state as it changes (maybe this isn't necessary)
+make slackbot a library
+read messages for markov bot
+
