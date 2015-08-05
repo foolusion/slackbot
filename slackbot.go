@@ -5,14 +5,24 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"golang.org/x/net/websocket"
 )
 
 var token = flag.String("token", "", "token for the api")
+
+// SlackMessage is the structure of messages sent to the server.
+type SlackMessage struct {
+	ID      int    `json:"id"`
+	Type    string `json:"type"`
+	Channel string `json:"channel"`
+	Text    string `json:"text"`
+}
 
 // SlackError is the code and error message received when something goes wrong.
 type SlackError struct {
@@ -28,6 +38,8 @@ type SlackEvent struct {
 	Timestamp string     `json:"ts"`
 	Text      string     `json:"text"`
 	Channel   string     `json:"channel"`
+	User      string     `json:"user"`
+	Subtype   string     `json:"subtype"`
 }
 
 // SlackAuthenticatedUser contains information about the authenticated user.
@@ -116,11 +128,24 @@ type rtmStart struct {
 
 // Bot is a representation of the bot and the current status of the slack client.
 type Bot struct {
-	Conn     *websocket.Conn
-	Self     SlackAuthenticatedUser
-	Team     SlackTeam
-	Users    []SlackUser
-	Channels []SlackChannel
+	Conn        *websocket.Conn
+	Self        SlackAuthenticatedUser
+	Team        SlackTeam
+	Users       []SlackUser
+	Channels    []SlackChannel
+	messageDict map[string][]string
+}
+
+// New creates a new bot. This is the proper way to initialize a Bot.
+func New() *Bot {
+	return &Bot{
+		messageDict: map[string][]string{
+			"##BOM##": []string{"Hello,"},
+			"Hello,":  []string{"World!"},
+			"World!":  []string{"##EOM##"},
+			"##EOM##": []string{"##EOM##"},
+		},
+	}
 }
 
 // Connect trys to connect the bot to the slack channel via token. It also stores the initial state of the slack.
@@ -174,32 +199,55 @@ func (b *Bot) Run() {
 				Type: "ping",
 			})
 		case data := <-rec:
-			fmt.Println(data)
+			if data.Type == "message" && b.parse(data) {
+				websocket.JSON.Send(b.Conn, b.RandomMessage())
+			}
 		}
+	}
+}
+
+func (b *Bot) parse(data *SlackEvent) bool {
+	fmt.Println(data)
+	words := strings.Split(data.Text, " ")
+	b.messageDict["##BOM##"] = append(b.messageDict["##BOM##"], words[0])
+	for i := 0; i < len(words)-1; i++ {
+		b.messageDict[words[i]] = append(b.messageDict[words[i]], words[i+1])
+	}
+	b.messageDict[words[len(words)-1]] = append(b.messageDict[words[len(words)-1]], "##EOM##")
+	return strings.Contains(data.Text, "<@"+b.Self.ID+">")
+}
+
+// RandomMessage returns a randomly generated slack message to send to the server.
+func (b *Bot) RandomMessage() SlackMessage {
+	token := "##BOM##"
+	token = b.messageDict[token][rand.Intn(len(b.messageDict[token]))]
+	message := token
+	for token != "##EOM##" {
+		token = b.messageDict[token][rand.Intn(len(b.messageDict[token]))]
+		if token != "##EOM##" {
+			message += " " + token
+		}
+	}
+
+	fmt.Println(message)
+	return SlackMessage{
+		ID:      1,
+		Type:    "message",
+		Channel: "C08K8V7GV",
+		Text:    message,
 	}
 }
 
 func main() {
 	flag.Parse()
 
-	bot := &Bot{}
+	bot := New()
 
 	err := bot.Connect(*token)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	var hello = struct {
-		ID      int    `json:"id"`
-		Type    string `json:"type"`
-		Channel string `json:"channel"`
-		Text    string `json:"text"`
-	}{
-		ID:      1,
-		Type:    "message",
-		Channel: "C08K8V7GV",
-		Text:    "Hello, World!",
-	}
-	websocket.JSON.Send(bot.Conn, hello)
+	websocket.JSON.Send(bot.Conn, bot.RandomMessage())
 	bot.Run()
 }
